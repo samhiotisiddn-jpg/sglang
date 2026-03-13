@@ -4,8 +4,8 @@ from transformers import PretrainedConfig, Qwen3Config
 from transformers.models.qwen2_vl.configuration_qwen2_vl import Qwen2VLVisionConfig
 
 
-class POINTSGUIConfig(PretrainedConfig):
-    model_type = "points_gui"
+class POINTS_SeekerConfig(PretrainedConfig):
+    model_type = "points_seeker"
 
     def __init__(
         self,
