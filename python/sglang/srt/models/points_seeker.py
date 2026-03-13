@@ -1,7 +1,7 @@
 import copy
 from typing import Optional
 
-from sglang.srt.configs.points_gui import POINTSGUIConfig
+from sglang.srt.configs.points_seeker import POINTS_SeekerConfig
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.models.qwen2_vl import Qwen2VisionPatchMerger
 from sglang.srt.models.qwen3 import Qwen3ForCausalLM
@@ -10,9 +10,9 @@ from sglang.srt.utils import add_prefix
 from .points_v15_chat import POINTSV15ChatModel, Qwen2VisionTransformerForNavitPOINTS
 
 
-class POINTSGUIModel(POINTSV15ChatModel):
-    config_class = POINTSGUIConfig
-    """GUI Model from WePOINTS series.
+class POINTS_SeekerModel(POINTSV15ChatModel):
+    config_class = POINTS_SeekerConfig
+    """Multimodal Agentic Search Model from WePOINTS series.
 
     The architecture is similar to POINTSV15ChatModel,
     but uses Qwen3ForCausalLM instead of Qwen2ForCausalLM.
@@ -23,7 +23,7 @@ class POINTSGUIModel(POINTSV15ChatModel):
 
     def __init__(
         self,
-        config: POINTSGUIConfig,
+        config: POINTS_SeekerConfig,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
         **kwargs
@@ -56,4 +56,4 @@ class POINTSGUIModel(POINTSV15ChatModel):
         )
 
 
-EntryClass = [POINTSGUIModel]
+EntryClass = [POINTS_SeekerModel]
