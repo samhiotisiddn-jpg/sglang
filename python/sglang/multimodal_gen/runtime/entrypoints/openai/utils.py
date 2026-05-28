@@ -167,6 +167,22 @@ def _is_disallowed_ip(ip: ipaddress._BaseAddress) -> bool:
     )
 
 
+def _get_allowed_image_hosts() -> list[str]:
+    """
+    Comma-separated allowlist of hostnames/domains for remote image fetches.
+    Example: "images.example.com,cdn.example.org"
+    """
+    raw = os.getenv("SGLANG_ALLOWED_IMAGE_HOSTS", "")
+    return [h.strip().lower() for h in raw.split(",") if h and h.strip()]
+
+
+def _is_hostname_allowed(hostname: str, allowed_hosts: list[str]) -> bool:
+    for allowed in allowed_hosts:
+        if hostname == allowed or hostname.endswith(f".{allowed}"):
+            return True
+    return False
+
+
 def _validate_public_http_url(image_url: str) -> str:
     parsed = urlparse(image_url)
     if parsed.scheme not in {"http", "https"}:
@@ -180,8 +196,16 @@ def _validate_public_http_url(image_url: str) -> str:
     if hostname in {"localhost"} or hostname.endswith(".localhost"):
         raise ValueError("Localhost targets are not allowed")
 
+    allowed_hosts = _get_allowed_image_hosts()
+    if not allowed_hosts:
+        raise ValueError("Remote image URL fetching is disabled: no allowed hosts configured")
+    if not _is_hostname_allowed(hostname, allowed_hosts):
+        raise ValueError("URL hostname is not in the allowed image host list")
+
     try:
-        addrinfos = socket.getaddrinfo(hostname, parsed.port or 80, type=socket.SOCK_STREAM)
+        addrinfos = socket.getaddrinfo(
+            hostname, parsed.port or 80, type=socket.SOCK_STREAM
+        )
     except socket.gaierror as e:
         raise ValueError(f"Unable to resolve hostname: {hostname}") from e
 
