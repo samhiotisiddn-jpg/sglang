@@ -1,12 +1,15 @@
 # Copied and adapted from: https://github.com/hao-ai-lab/FastVideo
 import base64
+import ipaddress
 import os
 import re
 import shutil
+import socket
 import tempfile
 import time
 from contextlib import contextmanager
 from typing import Any, Generator, List, Optional, Union
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from fastapi import UploadFile
@@ -153,13 +156,52 @@ async def _save_upload_to_path(upload: UploadFile, target_path: str) -> str:
     return target_path
 
 
+def _is_disallowed_ip(ip: ipaddress._BaseAddress) -> bool:
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _validate_public_http_url(image_url: str) -> str:
+    parsed = urlparse(image_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("Only http/https URLs are allowed")
+    if not parsed.hostname:
+        raise ValueError("URL must include a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("URL userinfo is not allowed")
+
+    hostname = parsed.hostname.strip().lower()
+    if hostname in {"localhost"} or hostname.endswith(".localhost"):
+        raise ValueError("Localhost targets are not allowed")
+
+    try:
+        addrinfos = socket.getaddrinfo(hostname, parsed.port or 80, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        raise ValueError(f"Unable to resolve hostname: {hostname}") from e
+
+    for info in addrinfos:
+        ip_str = info[4][0]
+        ip_obj = ipaddress.ip_address(ip_str)
+        if _is_disallowed_ip(ip_obj):
+            raise ValueError("URL resolves to a non-public IP address")
+
+    return image_url
+
+
 async def _maybe_url_image(img_url: str, target_path: str) -> str | None:
     if not isinstance(img_url, str):
         return None
 
     if img_url.lower().startswith(("http://", "https://")):
+        validated_url = _validate_public_http_url(img_url)
         # Download image from URL
-        input_path = await _save_url_image_to_path(img_url, target_path)
+        input_path = await _save_url_image_to_path(validated_url, target_path)
         return input_path
     elif img_url.startswith("data:image"):
         # encode image base64 url
@@ -175,8 +217,21 @@ async def _save_url_image_to_path(image_url: str, target_path: str) -> str:
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(image_url, timeout=10.0)
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            current_url = _validate_public_http_url(image_url)
+            for _ in range(5):
+                response = await client.get(current_url, timeout=10.0)
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("Redirect response missing Location header")
+                    next_url = urljoin(current_url, location)
+                    current_url = _validate_public_http_url(next_url)
+                    continue
+                break
+            else:
+                raise ValueError("Too many redirects")
+
             response.raise_for_status()
 
             # Determine file extension from content type or URL after downloading
