@@ -8,6 +8,7 @@ repos:
       - id: check-symlinks
       - id: destroyed-symlinks
       - id: trailing-whitespace
+        exclude: ^fractalmesh/deploy\.sh$
       - id: end-of-file-fixer
       - id: check-yaml
         args: [--allow-multiple-documents]
@@ -24,7 +25,7 @@ repos:
     rev: 7.0.0
     hooks:
       - id: isort
-        exclude: '^python/sglang/srt/grpc/.*_pb2\.py$|^python/sglang/srt/grpc/.*_pb2_grpc\.py$|^python/sglang/srt/grpc/.*_pb2\.pyi$|^python/sglang/srt/grpc/.*_pb2_grpc\.pyi$'
+        exclude: '^fractalmesh/|^python/sglang/srt/grpc/.*_pb2\.py$|^python/sglang/srt/grpc/.*_pb2_grpc\.py$|^python/sglang/srt/grpc/.*_pb2\.pyi$|^python/sglang/srt/grpc/.*_pb2_grpc\.pyi$'
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.1
     hooks:
@@ -46,7 +47,7 @@ repos:
     rev: 26.1.0
     hooks:
       - id: black-jupyter
-        exclude: '^python/sglang/srt/grpc/.*_pb2\.py$|^python/sglang/srt/grpc/.*_pb2_grpc\.py$|^python/sglang/srt/grpc/.*_pb2\.pyi$|^python/sglang/srt/grpc/.*_pb2_grpc\.pyi$'
+        exclude: '^fractalmesh/|^python/sglang/srt/grpc/.*_pb2\.py$|^python/sglang/srt/grpc/.*_pb2_grpc\.py$|^python/sglang/srt/grpc/.*_pb2\.pyi$|^python/sglang/srt/grpc/.*_pb2_grpc\.pyi$'
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.1
     hooks:
@@ -70,7 +71,7 @@ repos:
       - id: check-chinese-characters
         name: check chinese characters in multimodal_gen
         entry: >-
-          python3 -c 'import sys, re; p=re.compile(r"[\u4e00-\u9fff]"); ec=0; [ ([(print(f"{f}:{i+1}: {l.strip()}") or (ec:=1)) for i,l in enumerate(open(f, "r", encoding="utf-8", errors="ignore")) if p.search(l)]) for f in sys.argv[1:] ]; sys.exit(ec)'
+          python3 -c 'import sys, re; p=re.compile(r"[一-鿿]"); ec=0; [ ([(print(f"{f}:{i+1}: {l.strip()}") or (ec:=1)) for i,l in enumerate(open(f, "r", encoding="utf-8", errors="ignore")) if p.search(l)]) for f in sys.argv[1:] ]; sys.exit(ec)'
         language: system
         files: ^python/sglang/multimodal_gen/.*
         exclude: ^(python/sglang/multimodal_gen/configs/sample|python/sglang/multimodal_gen/apps/ComfyUI_SGLDiffusion/workflows|python/sglang/multimodal_gen/runtime/pipelines_core/stages/model_specific_stages)(/|$)

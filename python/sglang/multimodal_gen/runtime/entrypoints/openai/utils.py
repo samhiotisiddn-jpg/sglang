@@ -129,7 +129,7 @@ def build_sampling_params(request_id: str, **kwargs) -> SamplingParams:
         **kwargs,
     )
 
-    # resolve output_quality → output_compression with the correct data_type.
+    # resolve output_quality -> output_compression with the correct data_type.
     # SamplingParams.__post_init__ may have resolved with the wrong data_type
     # (default VIDEO) before _adjust() set the correct one.
     if not has_explicit_compression and output_quality is not None:
@@ -181,7 +181,9 @@ def _validate_public_http_url(image_url: str) -> str:
         raise ValueError("Localhost targets are not allowed")
 
     try:
-        addrinfos = socket.getaddrinfo(hostname, parsed.port or 80, type=socket.SOCK_STREAM)
+        addrinfos = socket.getaddrinfo(
+            hostname, parsed.port or 80, type=socket.SOCK_STREAM
+        )
     except socket.gaierror as e:
         raise ValueError(f"Unable to resolve hostname: {hostname}") from e
 
