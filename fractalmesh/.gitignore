@@ -1,4 +1,15 @@
+# Credentials — never commit these
 .env
+*.env
+.secrets/
+fractal.env
+vault.env
+*_live.sh
+fm_deploy_live.sh
+secrets.json
+credentials.json
+
+# Runtime / build
 db/
 logs/
 whitepapers/
@@ -6,7 +17,10 @@ __pycache__/
 *.pyc
 *.pdf
 node_modules/
+
 # Allow fractalmesh/dist markdown docs
 !dist/
 !dist/*.md
+
+# Vercel
 .vercel
