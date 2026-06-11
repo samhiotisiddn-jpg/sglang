@@ -3,13 +3,9 @@
   "name": "orange-forest-b577",
   "main": "src/index.ts",
   "compatibility_date": "2025-02-04",
-  "observability": {
-    "enabled": true
-  },
+  "account_id": "f93e588dd359b2a16db953ca95e18e30",
+  "observability": { "enabled": true },
   "kv_namespaces": [
-    {
-      "binding": "KV",
-      "id": "b585ca687814461fb5dbc297bd81ef4b"
-    }
+    { "binding": "KV", "id": "b585ca687814461fb5dbc297bd81ef4b" }
   ]
 }
