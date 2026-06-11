@@ -31,6 +31,7 @@ import base64
 import collections
 import gzip
 import hashlib
+import hmac
 import io
 import json
 import math
@@ -940,7 +941,7 @@ def _is_admin(headers) -> bool:
     if not secret:
         return False
     auth = headers.get("X-Admin-Secret") or headers.get("Authorization", "")
-    return auth == secret or auth == f"Bearer {secret}"
+    return hmac.compare_digest(auth, secret) or hmac.compare_digest(auth, f"Bearer {secret}")
 
 # ---------------------------------------------------------------------------
 # HTTP handler

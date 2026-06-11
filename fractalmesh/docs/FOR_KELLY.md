@@ -59,6 +59,13 @@ FractalMesh runs on Sam's Android phone using an app called **Termux** (it's a t
 3. You'll see a table of processes. If they show **"online"** in green, it's running.
 4. If the table is empty or shows errors, see the "Restarting It" section below.
 
+### Full Diagnostic (shows everything at once):
+Sam also left a diagnostic script. Type this in Termux:
+```
+bash ~/fmsaas/fm-triage.sh
+```
+This will show every agent's status, memory use, and whether each API key (Stripe, OpenRouter, etc.) is responding. Share the output with any developer who's helping you.
+
 ### To See the Dashboard:
 Open a browser on the same phone (or same WiFi network) and go to:
 ```

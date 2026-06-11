@@ -28,6 +28,7 @@ if _ENV_FILE.exists():
 # stdlib imports
 # ---------------------------------------------------------------------------
 import hashlib
+import hmac
 import html
 import json
 import re
@@ -402,7 +403,10 @@ def _check_admin(handler: BaseHTTPRequestHandler) -> bool:
     token = auth.replace("Bearer ", "").strip()
     if not ADMIN_SECRET:
         return True  # no secret configured — open
-    return hashlib.sha256(token.encode()).hexdigest() == hashlib.sha256(ADMIN_SECRET.encode()).hexdigest()
+    return hmac.compare_digest(
+        hashlib.sha256(token.encode()).hexdigest(),
+        hashlib.sha256(ADMIN_SECRET.encode()).hexdigest(),
+    )
 
 
 def _parse_qs(path: str) -> dict:

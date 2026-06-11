@@ -209,7 +209,7 @@ def _check_auth(handler) -> bool:
     auth = handler.headers.get("Authorization", "")
     if not ADMIN_SECRET:
         return False
-    return auth == f"Bearer {ADMIN_SECRET}"
+    return hmac.compare_digest(auth, f"Bearer {ADMIN_SECRET}")
 
 
 # ── aggregation helpers ────────────────────────────────────────────────────────
