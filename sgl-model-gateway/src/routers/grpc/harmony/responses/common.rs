@@ -17,7 +17,9 @@ use crate::{
             ResponsesRequest, ResponsesResponse, StringOrContentParts,
         },
     },
-    routers::{error, grpc::common::responses::ResponsesContext},
+    routers::{
+        error, grpc::common::responses::ResponsesContext, mcp_utils::wrap_mcp_output_for_prompt,
+    },
 };
 
 /// Record of a single MCP tool call execution
@@ -186,7 +188,7 @@ pub(super) fn build_next_request_with_tools(
             .iter_mut()
             .find(|item| matches!(item, ResponseInputOutputItem::FunctionToolCall { call_id, .. } if call_id == &tool_result.call_id))
         {
-            *output = Some(output_str);
+            *output = Some(wrap_mcp_output_for_prompt(&output_str));
             *status = if tool_result.is_error {
                 Some("failed".to_string())
             } else {

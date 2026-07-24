@@ -13,6 +13,7 @@ use axum::{
     body::Body,
     http::{header::CONTENT_TYPE, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
+    Json,
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -41,7 +42,10 @@ use crate::{
     },
     routers::{
         header_utils::{apply_request_headers, preserve_response_headers},
-        mcp_utils::{ensure_request_mcp_client, McpLoopConfig},
+        mcp_utils::{
+            ensure_request_mcp_client, extract_behavior_certificate, extract_x_payment_token,
+            AgenticBehaviorCertificate, McpLoopConfig,
+        },
         openai::context::{RequestContext, StreamingEventContext, StreamingRequest},
         persistence_utils::persist_conversation_items,
     },
@@ -488,6 +492,7 @@ pub(super) async fn handle_simple_streaming_passthrough(
     headers: Option<&HeaderMap>,
     req: StreamingRequest,
 ) -> Response {
+    let payment_token = extract_x_payment_token(&req.original_body);
     let mut request_builder = client.post(&req.url).json(&req.payload);
 
     if let Some(headers) = headers {
@@ -496,7 +501,7 @@ pub(super) async fn handle_simple_streaming_passthrough(
 
     request_builder = request_builder.header("Accept", "text/event-stream");
 
-    let response = match request_builder.send().await {
+    let mut response = match request_builder.send().await {
         Ok(resp) => resp,
         Err(err) => {
             circuit_breaker.record_failure();
@@ -507,6 +512,29 @@ pub(super) async fn handle_simple_streaming_passthrough(
                 .into_response();
         }
     };
+
+    if response.status().as_u16() == 402 {
+        if let Some(token) = payment_token.as_deref() {
+            let mut retry_builder = client.post(&req.url).json(&req.payload);
+            if let Some(headers) = headers {
+                retry_builder = apply_request_headers(headers, retry_builder, true);
+            }
+            retry_builder = retry_builder
+                .header("Accept", "text/event-stream")
+                .header("X-Payment", token);
+            response = match retry_builder.send().await {
+                Ok(resp) => resp,
+                Err(err) => {
+                    circuit_breaker.record_failure();
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        format!("Failed x402 replay request to OpenAI: {}", err),
+                    )
+                        .into_response();
+                }
+            };
+        }
+    }
 
     let status = response.status();
     let status_code =
@@ -639,6 +667,7 @@ pub(super) async fn handle_streaming_with_tool_interception(
     req: StreamingRequest,
     active_mcp: &Arc<smg_mcp::McpManager>,
     server_keys: Vec<String>,
+    behavior_certificate: Option<AgenticBehaviorCertificate>,
 ) -> Response {
     // Transform MCP tools to function tools in payload
     let mut payload = req.payload;
@@ -658,6 +687,7 @@ pub(super) async fn handle_streaming_with_tool_interception(
     let payload_clone = payload.clone();
     let active_mcp_clone = Arc::clone(active_mcp);
     let server_keys_clone = server_keys.clone();
+    let behavior_certificate_clone = behavior_certificate.clone();
 
     // Spawn the streaming loop task
     tokio::spawn(async move {
@@ -686,6 +716,7 @@ pub(super) async fn handle_streaming_with_tool_interception(
                     .and_then(|t| t.server_label.as_deref())
             })
             .unwrap_or("mcp");
+        let payment_token = extract_x_payment_token(&original_request);
 
         let streaming_ctx = StreamingEventContext {
             server_label,
@@ -702,7 +733,7 @@ pub(super) async fn handle_streaming_with_tool_interception(
             }
             request_builder = request_builder.header("Accept", "text/event-stream");
 
-            let response = match request_builder.send().await {
+            let mut response = match request_builder.send().await {
                 Ok(r) => r,
                 Err(e) => {
                     let error_event = format!(
@@ -713,6 +744,30 @@ pub(super) async fn handle_streaming_with_tool_interception(
                     return;
                 }
             };
+
+            if response.status().as_u16() == 402 {
+                if let Some(token) = payment_token.as_deref() {
+                    let mut retry_builder = client_clone.post(&url_clone).json(&current_payload);
+                    if let Some(ref h) = headers_opt {
+                        retry_builder = apply_request_headers(h, retry_builder, true);
+                    }
+                    retry_builder = retry_builder
+                        .header("Accept", "text/event-stream")
+                        .header("X-Payment", token);
+
+                    response = match retry_builder.send().await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            let error_event = format!(
+                                "event: error\ndata: {{\"error\": {{\"message\": \"x402 replay failed: {}\"}}}}\n\n",
+                                e
+                            );
+                            let _ = tx.send(Ok(Bytes::from(error_event)));
+                            return;
+                        }
+                    };
+                }
+            }
 
             if !response.status().is_success() {
                 let status = response.status();
@@ -943,6 +998,7 @@ pub(super) async fn handle_streaming_with_tool_interception(
                 &mut state,
                 server_label,
                 &mut sequence_number,
+                behavior_certificate_clone.as_ref(),
             )
             .await
             {
@@ -990,12 +1046,37 @@ pub async fn handle_streaming_response(ctx: RequestContext) -> Response {
     let headers = ctx.headers().cloned();
     let original_body = ctx.responses_request();
     let mcp_manager = ctx.components.mcp_manager().expect("MCP manager required");
+    let behavior_certificate = match extract_behavior_certificate(original_body) {
+        Ok(cert) => cert,
+        Err(msg) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"message": msg}})),
+            )
+                .into_response();
+        }
+    };
 
     let server_keys = match original_body.tools.as_ref() {
-        Some(tools) => match ensure_request_mcp_client(mcp_manager, tools.as_slice()).await {
-            Some((_manager, keys)) => keys,
-            None => Vec::new(),
-        },
+        Some(tools) => {
+            match ensure_request_mcp_client(
+                mcp_manager,
+                tools.as_slice(),
+                behavior_certificate.as_ref(),
+            )
+            .await
+            {
+                Ok(Some((_manager, keys))) => keys,
+                Ok(None) => Vec::new(),
+                Err(msg) => {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({"error": {"message": msg}})),
+                    )
+                        .into_response();
+                }
+            }
+        }
         None => Vec::new(),
     };
 
@@ -1027,6 +1108,7 @@ pub async fn handle_streaming_response(ctx: RequestContext) -> Response {
         req,
         &active_mcp,
         server_keys,
+        behavior_certificate,
     )
     .await
 }

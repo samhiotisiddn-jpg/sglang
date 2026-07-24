@@ -28,7 +28,7 @@ use crate::{
             },
             harmony::{processor::ResponsesIterationResult, streaming::HarmonyStreamingProcessor},
         },
-        mcp_utils::{extract_server_label, DEFAULT_MAX_ITERATIONS},
+        mcp_utils::{extract_behavior_certificate, extract_server_label, DEFAULT_MAX_ITERATIONS},
     },
 };
 
@@ -48,7 +48,7 @@ pub(crate) async fn serve_harmony_responses_stream(
 
     // Check MCP connection BEFORE starting stream and get whether MCP tools are present
     let (has_mcp_tools, server_keys) =
-        match ensure_mcp_connection(&ctx.mcp_manager, current_request.tools.as_deref()).await {
+        match ensure_mcp_connection(&ctx.mcp_manager, &current_request).await {
             Ok(result) => result,
             Err(response) => return response,
         };
@@ -118,6 +118,14 @@ async fn execute_mcp_tool_loop_streaming(
     emitter: &mut ResponseStreamEventEmitter,
     tx: &mpsc::UnboundedSender<Result<Bytes, std::io::Error>>,
 ) {
+    let behavior_certificate = match extract_behavior_certificate(original_request) {
+        Ok(cert) => cert,
+        Err(msg) => {
+            emitter.emit_error(&msg, Some("invalid_behavior_certificate"), tx);
+            return;
+        }
+    };
+
     // Extract server_label from request tools
     let server_label = extract_server_label(current_request.tools.as_deref(), "sglang-mcp");
 
@@ -355,6 +363,7 @@ async fn execute_mcp_tool_loop_streaming(
                         &mcp_tool_calls,
                         &mut mcp_tracking,
                         &current_request.model,
+                        behavior_certificate.as_ref(),
                     )
                     .await
                     {

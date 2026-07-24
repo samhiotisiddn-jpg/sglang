@@ -14,7 +14,10 @@ use crate::{
         common::{Function, ToolCall},
         responses::{ResponseTool, ResponseToolType},
     },
-    routers::error,
+    routers::{
+        error,
+        mcp_utils::{enforce_tool_call_certificate, AgenticBehaviorCertificate},
+    },
 };
 
 /// Tool execution result
@@ -47,6 +50,7 @@ pub(super) async fn execute_mcp_tools(
     tool_calls: &[ToolCall],
     tracking: &mut McpCallTracking,
     model_id: &str,
+    behavior_certificate: Option<&AgenticBehaviorCertificate>,
 ) -> Result<Vec<ToolResult>, Response> {
     let mut results = Vec::new();
 
@@ -56,6 +60,12 @@ pub(super) async fn execute_mcp_tools(
             call_id = %tool_call.id,
             "Executing MCP tool"
         );
+
+        if let Err(msg) =
+            enforce_tool_call_certificate(behavior_certificate, &tool_call.function.name)
+        {
+            return Err(error::forbidden("behavior_certificate_denied", msg));
+        }
 
         // Parse tool arguments from JSON string
         let args_str = tool_call.function.arguments.as_deref().unwrap_or("{}");

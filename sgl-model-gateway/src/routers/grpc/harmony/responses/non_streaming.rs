@@ -33,7 +33,7 @@ use crate::{
             },
             harmony::processor::ResponsesIterationResult,
         },
-        mcp_utils::{extract_server_label, DEFAULT_MAX_ITERATIONS},
+        mcp_utils::{extract_behavior_certificate, extract_server_label, DEFAULT_MAX_ITERATIONS},
     },
 };
 
@@ -59,7 +59,7 @@ pub(crate) async fn serve_harmony_responses(
 
     // Check MCP connection and get whether MCP tools are present
     let (has_mcp_tools, server_keys) =
-        ensure_mcp_connection(&ctx.mcp_manager, current_request.tools.as_deref()).await?;
+        ensure_mcp_connection(&ctx.mcp_manager, &current_request).await?;
 
     // Set the server keys in the context
     {
@@ -95,6 +95,8 @@ async fn execute_with_mcp_loop(
     mut current_request: ResponsesRequest,
 ) -> Result<ResponsesResponse, Response> {
     let mut iteration_count = 0;
+    let behavior_certificate = extract_behavior_certificate(&current_request)
+        .map_err(|e| error::bad_request("invalid_behavior_certificate", e))?;
 
     // Extract server_label from request tools
     let server_label = extract_server_label(current_request.tools.as_deref(), "sglang-mcp");
@@ -239,6 +241,7 @@ async fn execute_with_mcp_loop(
                         &mcp_tool_calls,
                         &mut mcp_tracking,
                         &current_request.model,
+                        behavior_certificate.as_ref(),
                     )
                     .await?
                 } else {

@@ -24,7 +24,9 @@ use crate::{
             ResponseOutputItem, ResponsesRequest,
         },
     },
-    routers::{error, grpc::common::responses::ResponsesContext},
+    routers::{
+        error, grpc::common::responses::ResponsesContext, mcp_utils::wrap_mcp_output_for_prompt,
+    },
 };
 
 // ============================================================================
@@ -430,8 +432,28 @@ pub(super) fn build_next_request(
         ResponseInput::Items(items) => items.iter().map(responses::normalize_input_item).collect(),
     };
 
-    // Append all conversation history (function calls and outputs)
-    input_items.extend_from_slice(&state.conversation_history);
+    // Append conversation history while wrapping external MCP outputs
+    for item in &state.conversation_history {
+        let transformed = match item {
+            ResponseInputOutputItem::FunctionToolCall {
+                id,
+                call_id,
+                name,
+                arguments,
+                output,
+                status,
+            } => ResponseInputOutputItem::FunctionToolCall {
+                id: id.clone(),
+                call_id: call_id.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+                output: output.as_ref().map(|o| wrap_mcp_output_for_prompt(o)),
+                status: status.clone(),
+            },
+            other => other.clone(),
+        };
+        input_items.push(transformed);
+    }
 
     // Build new request for next iteration
     ResponsesRequest {

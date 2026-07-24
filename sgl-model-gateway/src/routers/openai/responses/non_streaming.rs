@@ -16,7 +16,10 @@ use super::{
 };
 use crate::routers::{
     header_utils::{apply_provider_headers, extract_auth_header},
-    mcp_utils::{ensure_request_mcp_client, McpLoopConfig},
+    mcp_utils::{
+        ensure_request_mcp_client, extract_behavior_certificate, extract_x_payment_token,
+        McpLoopConfig,
+    },
     openai::context::{PayloadState, RequestContext},
     persistence_utils::persist_conversation_items,
 };
@@ -50,11 +53,37 @@ pub async fn handle_non_streaming_response(mut ctx: RequestContext) -> Response 
         }
     };
 
+    let behavior_certificate = match extract_behavior_certificate(original_body) {
+        Ok(cert) => cert,
+        Err(msg) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"message": msg}})),
+            )
+                .into_response();
+        }
+    };
+
     let server_keys = match original_body.tools.as_ref() {
-        Some(tools) => match ensure_request_mcp_client(mcp_manager, tools.as_slice()).await {
-            Some((_manager, keys)) => keys,
-            None => Vec::new(),
-        },
+        Some(tools) => {
+            match ensure_request_mcp_client(
+                mcp_manager,
+                tools.as_slice(),
+                behavior_certificate.as_ref(),
+            )
+            .await
+            {
+                Ok(Some((_manager, keys))) => keys,
+                Ok(None) => Vec::new(),
+                Err(msg) => {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({"error": {"message": msg}})),
+                    )
+                        .into_response();
+                }
+            }
+        }
         None => Vec::new(),
     };
 
@@ -81,6 +110,7 @@ pub async fn handle_non_streaming_response(mut ctx: RequestContext) -> Response 
             original_body,
             mcp,
             &config,
+            behavior_certificate.as_ref(),
         )
         .await
         {
@@ -95,11 +125,19 @@ pub async fn handle_non_streaming_response(mut ctx: RequestContext) -> Response 
             }
         }
     } else {
-        let mut request_builder = ctx.components.client().post(&url).json(&payload);
         let auth_header = extract_auth_header(ctx.headers(), worker.api_key());
-        request_builder = apply_provider_headers(request_builder, &url, auth_header.as_ref());
+        let payment_token = extract_x_payment_token(original_body);
 
-        let response = match request_builder.send().await {
+        let build_request = |payment: Option<&str>| {
+            let mut request_builder = ctx.components.client().post(&url).json(&payload);
+            request_builder = apply_provider_headers(request_builder, &url, auth_header.as_ref());
+            if let Some(token) = payment {
+                request_builder = request_builder.header("X-Payment", token);
+            }
+            request_builder
+        };
+
+        let mut response = match build_request(None).send().await {
             Ok(r) => r,
             Err(e) => {
                 worker.circuit_breaker().record_failure();
@@ -115,6 +153,22 @@ pub async fn handle_non_streaming_response(mut ctx: RequestContext) -> Response 
                     .into_response();
             }
         };
+
+        if response.status().as_u16() == 402 {
+            if let Some(token) = payment_token.as_deref() {
+                response = match build_request(Some(token)).send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        worker.circuit_breaker().record_failure();
+                        return (
+                            StatusCode::BAD_GATEWAY,
+                            format!("Failed x402 replay request to OpenAI: {}", e),
+                        )
+                            .into_response();
+                    }
+                };
+            }
+        }
 
         if !response.status().is_success() {
             worker.circuit_breaker().record_failure();

@@ -27,7 +27,10 @@ use crate::{
         grpc::common::responses::{
             ensure_mcp_connection, persist_response_if_needed, ResponsesContext,
         },
-        mcp_utils::{extract_server_label, DEFAULT_MAX_ITERATIONS},
+        mcp_utils::{
+            enforce_tool_call_certificate, extract_behavior_certificate, extract_server_label,
+            DEFAULT_MAX_ITERATIONS,
+        },
     },
 };
 
@@ -49,8 +52,7 @@ pub(super) async fn route_responses_internal(
     let modified_request = load_conversation_history(ctx, &request).await?;
 
     // 2. Check MCP connection and get whether MCP tools are present
-    let (has_mcp_tools, server_keys) =
-        ensure_mcp_connection(&ctx.mcp_manager, request.tools.as_deref()).await?;
+    let (has_mcp_tools, server_keys) = ensure_mcp_connection(&ctx.mcp_manager, &request).await?;
 
     // Set the server keys in the context
     {
@@ -163,6 +165,8 @@ pub(super) async fn execute_tool_loop(
     let server_label = extract_server_label(original_request.tools.as_deref(), "request-mcp");
 
     let mut state = ToolLoopState::new(original_request.input.clone(), server_label.clone());
+    let behavior_certificate = extract_behavior_certificate(original_request)
+        .map_err(|e| error::bad_request("invalid_behavior_certificate", e))?;
 
     // Configuration: max iterations as safety limit
     let max_tool_calls = original_request.max_tool_calls.map(|n| n as usize);
@@ -320,6 +324,12 @@ pub(super) async fn execute_tool_loop(
                     tool_call.call_id,
                     tool_call.arguments
                 );
+
+                if let Err(msg) =
+                    enforce_tool_call_certificate(behavior_certificate.as_ref(), &tool_call.name)
+                {
+                    return Err(error::forbidden("behavior_certificate_denied", msg));
+                }
 
                 let tool_start = Instant::now();
                 let (output_str, success, error) = match ctx
