@@ -28,6 +28,7 @@ python3 scripts/copy_from_oss.py --local-dir ~/projects/sglang
 
 import argparse
 import datetime
+import json
 import os
 import shutil
 import subprocess
@@ -178,6 +179,46 @@ def create_pull_request(branch_name, title, body, dry_run):
             return
 
     print("\nCreating pull request...")
+    existing_pr_command = [
+        "gh",
+        "pr",
+        "list",
+        "--base",
+        "main",
+        "--head",
+        branch_name,
+        "--repo",
+        private_repo,
+        "--state",
+        "open",
+        "--json",
+        "url",
+        "--limit",
+        "1",
+    ]
+
+    print(f"Run: {' '.join(existing_pr_command)}")
+    if not dry_run:
+        env = os.environ.copy()
+        env["GH_TOKEN"] = gh_token
+        existing_pr_result = subprocess.run(
+            existing_pr_command, check=True, capture_output=True, text=True, env=env
+        )
+        existing_prs = json.loads(existing_pr_result.stdout or "[]")
+        if existing_prs:
+            existing_pr_url = "unknown"
+            try:
+                if isinstance(existing_prs[0], dict):
+                    existing_pr_url = existing_prs[0].get("url", existing_pr_url)
+            except Exception:
+                pass
+            msg = (
+                f"✅ Open pull request already exists for {branch_name}: {existing_pr_url}"
+            )
+            print(msg)
+            write_github_step_summary(msg)
+            return
+
     command = [
         "gh",
         "pr",
