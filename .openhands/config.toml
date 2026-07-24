@@ -1,0 +1,25 @@
+[agent]
+name = "fractalmesh-autopilot"
+mode = "ci-remediator"
+enable_plan_and_execute = true
+
+[security]
+zero_trust = true
+block_plaintext_secrets = true
+required_identity_provider = "spiffe"
+required_secret_provider = "vault"
+
+[providers.openrouter]
+enabled = true
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+default_model = "openrouter/auto"
+
+[triggers.pipeline_failure]
+enabled = true
+workflows = ["FractalMesh CI"]
+actions = ["diagnose", "suggest_patch", "open_pr"]
+
+[notifications]
+webhook_env = "FRACTALMESH_OPENHANDS_WEBHOOK"
+include_run_context = true

@@ -1,0 +1,96 @@
+name: FractalMesh CI
+
+on:
+  push:
+    paths:
+      - "fractalmesh/**"
+      - "workers/**"
+      - "api/**"
+      - "middleware/**"
+      - "agents/**"
+      - "tools/**"
+      - "actions/**"
+      - "database/**"
+      - ".github/workflows/fractalmesh-ci.yml"
+  pull_request:
+    paths:
+      - "fractalmesh/**"
+      - "workers/**"
+      - "api/**"
+      - "middleware/**"
+      - "agents/**"
+      - "tools/**"
+      - "actions/**"
+      - "database/**"
+      - ".github/workflows/fractalmesh-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fractalmesh-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix-validate:
+    name: Validate (${{ matrix.accelerator }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        accelerator: [amd, npu, xpu]
+    env:
+      TARGET_ACCELERATOR: ${{ matrix.accelerator }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      FRACTALMESH_OPENHANDS_WEBHOOK: ${{ secrets.FRACTALMESH_OPENHANDS_WEBHOOK }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Node dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Type check worker/edge code
+        run: npm run build
+
+      - name: Enforce zero-trust staged secret policies
+        run: bash scripts/zero_trust_vault.sh --scan-repo
+
+      - name: Upload OpenHands failure context
+        if: failure() && env.FRACTALMESH_OPENHANDS_WEBHOOK != ''
+        run: |
+          payload=$(cat <<'JSON'
+          {
+            "event": "fractalmesh_ci_failure",
+            "repository": "${{ github.repository }}",
+            "run_id": "${{ github.run_id }}",
+            "run_attempt": "${{ github.run_attempt }}",
+            "workflow": "${{ github.workflow }}",
+            "job": "${{ github.job }}",
+            "accelerator": "${{ matrix.accelerator }}",
+            "sha": "${{ github.sha }}",
+            "ref": "${{ github.ref }}"
+          }
+          JSON
+          )
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$FRACTALMESH_OPENHANDS_WEBHOOK"

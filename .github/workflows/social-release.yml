@@ -1,0 +1,84 @@
+name: Social Release Broadcast
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-broadcast:
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      CIRCLE_WEBHOOK_URL: ${{ secrets.CIRCLE_WEBHOOK_URL }}
+      VIP_STRIPE_LINK: ${{ secrets.VIP_STRIPE_LINK }}
+      VIP_GUMROAD_LINK: ${{ secrets.VIP_GUMROAD_LINK }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build broadcast payload
+        id: payload
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          api_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
+          release_json=$(curl --fail --show-error --silent \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "$api_url")
+
+          release_name=$(echo "$release_json" | jq -r '.name // empty')
+          release_body=$(echo "$release_json" | jq -r '.body // "No release notes provided."')
+          if [ -z "$release_name" ] || [ "$release_name" = "null" ]; then
+            release_name="$tag"
+          fi
+
+          cat > /tmp/social_message.txt <<EOF
+          ${release_name} (${tag}) is live.
+
+          ${release_body}
+
+          VIP Stripe: ${VIP_STRIPE_LINK}
+          VIP Gumroad: ${VIP_GUMROAD_LINK}
+          EOF
+
+      - name: Notify Discord
+        if: env.DISCORD_WEBHOOK_URL != ''
+        run: |
+          set -euo pipefail
+          payload=$(jq -Rs '{content: .}' /tmp/social_message.txt)
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$DISCORD_WEBHOOK_URL"
+
+      - name: Notify Telegram
+        if: env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent \
+            -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --rawfile text /tmp/social_message.txt '{chat_id: $chat_id, text: $text}')"
+
+      - name: Notify Circle
+        if: env.CIRCLE_WEBHOOK_URL != ''
+        run: |
+          set -euo pipefail
+          payload=$(jq -n --rawfile text /tmp/social_message.txt '{message: $text, source: "github-actions"}')
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$CIRCLE_WEBHOOK_URL"
