@@ -229,6 +229,10 @@ work_dirs/
 # VSCode
 .vscode
 
+# Node.js
+node_modules/
+package-lock.json
+
 # Autoenv
 .env.leave
 
