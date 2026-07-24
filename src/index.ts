@@ -100,12 +100,16 @@ async function handleAPI(
 
   // POST /api/revenue — prepend, keep last 500, accumulate totalRevenue
   if (path === '/api/revenue' && request.method === 'POST') {
-    const entry = { ...((await request.json()) as Record<string, unknown>), time: new Date().toISOString() };
+    const entry: Record<string, unknown> = {
+      ...((await request.json()) as Record<string, unknown>),
+      time: new Date().toISOString(),
+    };
     const revenue = ((await env.KV.get('revenue', 'json')) as unknown[]) ?? [];
     const next = [entry, ...revenue].slice(0, 500);
     await env.KV.put('revenue', JSON.stringify(next));
     const m = ((await env.KV.get('metrics', 'json')) as Record<string, unknown>) ?? {};
-    const amount = (entry.amount as number) ?? 0;
+    const amountRaw = entry.amount;
+    const amount = typeof amountRaw === 'number' ? amountRaw : Number(amountRaw ?? 0);
     await env.KV.put(
       'metrics',
       JSON.stringify({
