@@ -24,7 +24,10 @@ use crate::{
     },
     routers::{
         header_utils::apply_request_headers,
-        mcp_utils::{extract_server_label, McpLoopConfig},
+        mcp_utils::{
+            enforce_tool_call_certificate, extract_server_label, extract_x_payment_token,
+            wrap_mcp_output_for_prompt, AgenticBehaviorCertificate, McpLoopConfig,
+        },
     },
 };
 
@@ -127,6 +130,7 @@ pub(super) async fn execute_streaming_tool_calls(
     state: &mut ToolLoopState,
     server_label: &str,
     sequence_number: &mut u64,
+    behavior_certificate: Option<&AgenticBehaviorCertificate>,
 ) -> bool {
     // Execute all pending tool calls (sequential, as PR3 is skipped)
     for call in pending_calls {
@@ -143,6 +147,11 @@ pub(super) async fn execute_streaming_tool_calls(
             "Executing tool call during streaming: {} ({})",
             call.name, call.call_id
         );
+
+        if let Err(err) = enforce_tool_call_certificate(behavior_certificate, &call.name) {
+            warn!("Blocked MCP tool execution: {}", err);
+            return false;
+        }
 
         // Use empty JSON object if arguments_buffer is empty
         let args_str = if call.arguments_buffer.is_empty() {
@@ -189,7 +198,12 @@ pub(super) async fn execute_streaming_tool_calls(
         }
 
         // Record the call
-        state.record_call(call.call_id, call.name, call.arguments_buffer, output_str);
+        state.record_call(
+            call.call_id,
+            call.name,
+            call.arguments_buffer,
+            wrap_mcp_output_for_prompt(&output_str),
+        );
     }
     true
 }
@@ -507,8 +521,10 @@ pub(super) async fn execute_tool_loop(
     original_body: &ResponsesRequest,
     active_mcp: &Arc<mcp::McpManager>,
     config: &McpLoopConfig,
+    behavior_certificate: Option<&AgenticBehaviorCertificate>,
 ) -> Result<Value, String> {
     let mut state = ToolLoopState::new(original_body.input.clone());
+    let payment_token = extract_x_payment_token(original_body);
 
     // Get max_tool_calls from request (None means no user-specified limit)
     let max_tool_calls = original_body.max_tool_calls.map(|n| n as usize);
@@ -524,18 +540,33 @@ pub(super) async fn execute_tool_loop(
     );
 
     loop {
-        // Make request to upstream
-        let request_builder = client.post(url).json(&current_payload);
-        let request_builder = if let Some(headers) = headers {
-            apply_request_headers(headers, request_builder, true)
-        } else {
+        let build_request = |payment: Option<&str>| {
+            let request_builder = client.post(url).json(&current_payload);
+            let mut request_builder = if let Some(headers) = headers {
+                apply_request_headers(headers, request_builder, true)
+            } else {
+                request_builder
+            };
+            if let Some(token) = payment {
+                request_builder = request_builder.header("X-Payment", token);
+            }
             request_builder
         };
 
-        let response = request_builder
+        // Make request to upstream
+        let mut response = build_request(None)
             .send()
             .await
             .map_err(|e| format!("upstream request failed: {}", e))?;
+
+        if response.status().as_u16() == 402 {
+            if let Some(token) = payment_token.as_deref() {
+                response = build_request(Some(token))
+                    .send()
+                    .await
+                    .map_err(|e| format!("x402 replay request failed: {}", e))?;
+            }
+        }
 
         if !response.status().is_success() {
             let status = response.status();
@@ -557,6 +588,8 @@ pub(super) async fn execute_tool_loop(
                 "Tool loop iteration {}: calling {} (call_id: {})",
                 state.iteration, tool_name, call_id
             );
+
+            enforce_tool_call_certificate(behavior_certificate, &tool_name)?;
 
             // Check combined limit: use minimum of user's max_tool_calls (if set) and safety max_iterations
             let effective_limit = match max_tool_calls {
@@ -616,7 +649,8 @@ pub(super) async fn execute_tool_loop(
             };
 
             // Record the call
-            state.record_call(call_id, tool_name, args_json_str, output_str);
+            let wrapped_output = wrap_mcp_output_for_prompt(&output_str);
+            state.record_call(call_id, tool_name, args_json_str, wrapped_output);
 
             // Build resume payload
             current_payload = build_resume_payload(

@@ -15,7 +15,9 @@ use crate::{
         responses::{ResponseTool, ResponseToolType, ResponsesRequest, ResponsesResponse},
     },
     routers::{
-        error, mcp_utils::ensure_request_mcp_client, persistence_utils::persist_conversation_items,
+        error,
+        mcp_utils::{ensure_request_mcp_client, extract_behavior_certificate},
+        persistence_utils::persist_conversation_items,
     },
 };
 
@@ -26,8 +28,9 @@ use crate::{
 /// Returns Ok((has_mcp_tools, server_keys)) on success.
 pub(crate) async fn ensure_mcp_connection(
     mcp_manager: &Arc<McpManager>,
-    tools: Option<&[ResponseTool]>,
+    request: &ResponsesRequest,
 ) -> Result<(bool, Vec<String>), Response> {
+    let tools = request.tools.as_deref();
     let has_mcp_tools = tools
         .map(|t| {
             t.iter()
@@ -36,12 +39,16 @@ pub(crate) async fn ensure_mcp_connection(
         .unwrap_or(false);
 
     if has_mcp_tools {
+        let behavior_certificate = extract_behavior_certificate(request)
+            .map_err(|msg| error::bad_request("invalid_behavior_certificate", msg))?;
+
         if let Some(tools) = tools {
-            match ensure_request_mcp_client(mcp_manager, tools).await {
-                Some((_manager, server_keys)) => {
+            match ensure_request_mcp_client(mcp_manager, tools, behavior_certificate.as_ref()).await
+            {
+                Ok(Some((_manager, server_keys))) => {
                     return Ok((true, server_keys));
                 }
-                None => {
+                Ok(None) => {
                     error!(
                         function = "ensure_mcp_connection",
                         "Failed to connect to MCP servers"
@@ -50,6 +57,9 @@ pub(crate) async fn ensure_mcp_connection(
                         "connect_mcp_server_failed",
                         "Failed to connect to MCP servers. Check server_url and authorization.",
                     ));
+                }
+                Err(msg) => {
+                    return Err(error::forbidden("behavior_certificate_denied", msg));
                 }
             }
         }
